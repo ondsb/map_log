@@ -42,6 +42,9 @@ class GPTConfig:
     use_rmsnorm: bool = False  # RMSNorm instead of LayerNorm
     use_fourier_num: bool = True  # Fourier features for numeric embedding
     num_frequencies: int = 32  # Number of Fourier frequencies
+    
+    # Hardware configuration
+    hardware_peak_tflops: float = 137.0  # PGX G10 FP16 peak (A100=312, H100=989)
 
     batch_size: int = 64
     warmup_iters: int = 100
