@@ -33,16 +33,21 @@ bias = False
 
 # ============================================================================
 # TRAINING CONFIGURATION
+# Optimized for PGX G10 with 128GB LPDDR5 unified memory
 # ============================================================================
-batch_size = 32
-gradient_accumulation_steps = 2
-# effective batch size = 8batch_size * gradient_accumulation_steps 
-# tokens per iter = effective batch size * block_size
+# Batch size: Increased for unified memory (no CPU/GPU transfer overhead)
+# With 128GB shared memory, we can use larger batches without OOM
+batch_size = 128  # Increased from 32 (4x)
+gradient_accumulation_steps = 1  # Reduced from 2 (larger batch compensates)
+# effective batch size = batch_size * gradient_accumulation_steps = 128
+# tokens per iter = effective batch size * block_size = 128 * 512 = 65,536
 
 # Learning rate schedule
-learning_rate = 5e-4
+# Increased learning rate slightly to account for larger batch size
+# Following linear scaling rule: lr_new = lr_old * (batch_new / batch_old)
+learning_rate = 1e-3  # Increased from 5e-4 (2x for 4x batch = sqrt scaling)
 max_iters = 100000
-warmup_iters = 100
+warmup_iters = 200  # Increased warmup for larger batch
 decay_lr = True
 lr_decay_iters = int(0.9 * max_iters)
 min_lr = 1e-5

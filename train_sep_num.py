@@ -60,7 +60,7 @@ if mlflow_log:
 train_data, val_data, meta = get_train_val_meta()
 
 # Set up torch optimizations before model creation
-set_torch_config()
+set_torch_config(unified_memory=UNIFIED_MEMORY)
 
 # Create model BEFORE loading data to GPU
 gpt_conf = GPTConfig(**model_args)
