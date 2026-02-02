@@ -12,6 +12,17 @@ from dota2.data.dataset import Dota2Dataset, create_dataloader, InfiniteDataLoad
 from model.GPT import GPT, GPTConfig
 from model.torch_config import set_torch_config
 
+# ============================================================================
+# PGX G10 Unified Memory Configuration
+# ============================================================================
+# The PGX G10 has unified memory architecture where CPU and GPU share 128GB LPDDR5.
+# Key optimizations:
+# - pin_memory=False (no benefit, adds overhead on unified memory)
+# - No non_blocking transfers needed (same memory space)
+# - Can use larger batch sizes (128GB shared)
+# - num_workers > 0 is beneficial (no memory duplication penalty)
+UNIFIED_MEMORY = True
+
 os.makedirs(out_dir, exist_ok=True)
 
 # dtype and autocast context
@@ -77,9 +88,12 @@ torch.cuda.reset_peak_memory_stats()
 if mlflow_log:
     mlflow.log_metric("memory/model_loaded_gb", torch.cuda.memory_allocated() / 1e9, step=0)
 
-# Compile model with memory-efficient settings
+# Compile model with optimized settings for unified memory
 if do_compile:
-    model: GPT = torch.compile(model, mode="reduce-overhead")
+    # max-autotune: Better kernel selection for unified memory architecture
+    # fullgraph: Compile entire model as single graph for maximum optimization
+    print("Compiling model with max-autotune mode...")
+    model: GPT = torch.compile(model, mode="max-autotune", fullgraph=True)
 
 # Log memory after compile
 if mlflow_log:
@@ -93,6 +107,7 @@ train_dataset = Dota2Dataset(
     tokenizer=model.generator.tokenizer,
     block_size=block_size,
     device=device,
+    unified_memory=UNIFIED_MEMORY,
 )
 
 val_dataset = Dota2Dataset(
@@ -100,19 +115,23 @@ val_dataset = Dota2Dataset(
     tokenizer=model.generator.tokenizer,
     block_size=block_size,
     device=device,
+    unified_memory=UNIFIED_MEMORY,
 )
 
 
-# Create DataLoaders with pinned memory for fast GPU transfer
+# Create DataLoaders optimized for unified memory architecture
+# PGX G10: pin_memory=False (no benefit), num_workers>0 (no memory duplication penalty)
 train_loader = InfiniteDataLoader(
     create_dataloader(
         train_dataset,
         batch_size=batch_size,
         shuffle=True,
-        num_workers=0,  # Main process to avoid memory duplication
-        pin_memory=True,
+        num_workers=4,  # Parallel loading (no memory duplication on unified memory)
+        pin_memory=False,  # Disabled for unified memory
         drop_last=True,
-    )
+        prefetch_factor=2,
+    ),
+    unified_memory=UNIFIED_MEMORY,
 )
 
 val_loader = InfiniteDataLoader(
@@ -120,10 +139,12 @@ val_loader = InfiniteDataLoader(
         val_dataset,
         batch_size=batch_size,
         shuffle=False,
-        num_workers=0,
-        pin_memory=True,
+        num_workers=4,
+        pin_memory=False,
         drop_last=True,
-    )
+        prefetch_factor=2,
+    ),
+    unified_memory=UNIFIED_MEMORY,
 )
 
 # Log final memory state before training
