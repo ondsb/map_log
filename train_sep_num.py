@@ -11,6 +11,7 @@ from dota2.data.data_train import get_train_val_meta
 from dota2.data.dataset import Dota2Dataset, create_dataloader, InfiniteDataLoader
 from model.GPT import GPT, GPTConfig
 from model.torch_config import set_torch_config
+from model.memory_utils import print_memory_summary, clear_memory, log_memory_stats
 
 # ============================================================================
 # PGX G10 Unified Memory Configuration
@@ -53,6 +54,12 @@ if mlflow_log:
             "dtype": dtype,
             "gpu_name": torch.cuda.get_device_name(0),
             "gpu_memory_gb": round(torch.cuda.get_device_properties(0).total_memory / 1e9, 2),
+            # Architecture optimizations
+            "use_rope": use_rope,
+            "use_swiglu": use_swiglu,
+            "use_rmsnorm": use_rmsnorm,
+            "use_fourier_num": use_fourier_num,
+            "unified_memory": UNIFIED_MEMORY,
         }
     )
 
@@ -151,8 +158,17 @@ val_loader = InfiniteDataLoader(
 if mlflow_log:
     mlflow.log_metric("memory/initial_gb", torch.cuda.memory_allocated() / 1e9, step=0)
 
+# Print memory summary
+print_memory_summary(model, gpt_conf)
+
 # Initialize optimizer
 model.init_optimizer()
+
+# Clear any fragmented memory before training
+clear_memory()
+
+# Log memory before training starts
+log_memory_stats("Before training: ")
 
 # Train using the memory-efficient DataLoader-based method
 model.do_train_dataloader(

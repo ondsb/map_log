@@ -58,6 +58,12 @@ beta1 = 0.9
 beta2 = 0.99
 grad_clip = 1.0
 
+# Hardware-specific configuration
+# PGX G10 (Orin-based): ~137 TFLOPS FP16, 275 TFLOPS INT8
+# A100: 312 TFLOPS BF16
+# H100: 989 TFLOPS FP16 Tensor Core
+hardware_peak_tflops = 137  # For MFU calculation
+
 # Evaluation and checkpointing
 eval_interval = 100
 eval_iters = 50
@@ -130,4 +136,6 @@ model_args = dict(
     log_interval=log_interval,
     always_save_checkpoint=always_save_checkpoint,
     data_version=data_version,
+    # Hardware config
+    hardware_peak_tflops=hardware_peak_tflops,
 )

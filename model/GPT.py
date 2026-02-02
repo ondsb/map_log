@@ -850,7 +850,7 @@ class GPT(nn.Module):
         params are actually used as weights in the final layer, so we include them.
         """
         n_params = sum(p.numel() for p in self.parameters())
-        if non_embedding:
+        if non_embedding and hasattr(self.transformer, 'wpe'):
             n_params -= self.transformer.wpe.weight.numel()
         return n_params
 
@@ -864,19 +864,29 @@ class GPT(nn.Module):
 
     def estimate_mfu(self, fwdbwd_per_iter, dt):
         """
-        estimate model flops utilization (MFU) in units of A100 bfloat16 peak FLOPS
-        see PaLM paper Appendix B as ref: https://arxiv.org/abs/2204.02311
+        Estimate model FLOPs utilization (MFU).
+        
+        Compares achieved FLOPs to theoretical hardware peak.
+        Updated for PGX G10 (Orin-based, ~275 TFLOPS INT8, ~137 TFLOPS FP16).
+        
+        Reference: PaLM paper Appendix B (https://arxiv.org/abs/2204.02311)
         """
         N = self.get_num_params()
         cfg = self.config
         L, H, Q, T = cfg.n_layer, cfg.n_head, cfg.n_embd // cfg.n_head, cfg.block_size
 
+        # FLOPs calculation per PaLM paper
         flops_per_token = 6 * N + 12 * L * H * Q * T
         flops_per_fwdbwd = flops_per_token * T
         flops_per_iter = flops_per_fwdbwd * fwdbwd_per_iter
         flops_achieved = flops_per_iter * (1.0 / dt)
-        flops_promised = 312e12
-        mfu = flops_achieved / flops_promised
+        
+        # Hardware-specific peak FLOPs (configurable)
+        # PGX G10 (Orin): ~137 TFLOPS FP16
+        # A100: 312 TFLOPS BF16
+        # H100: 989 TFLOPS FP16 Tensor Core
+        hardware_flops = getattr(cfg, 'hardware_peak_tflops', 137) * 1e12
+        mfu = flops_achieved / hardware_flops
 
         return mfu
 
