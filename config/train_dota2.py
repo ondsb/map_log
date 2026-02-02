@@ -65,11 +65,21 @@ log_interval = 10
 always_save_checkpoint = True
 
 # ============================================================================
+# ARCHITECTURE OPTIMIZATIONS (Phase 3)
+# These features improve training quality and sometimes speed
+# ============================================================================
+use_rope = True  # Rotary Position Embeddings (better extrapolation)
+use_swiglu = True  # SwiGLU MLP (better training dynamics than GELU)
+use_rmsnorm = False  # RMSNorm (slightly faster, but LayerNorm is more stable)
+use_fourier_num = True  # Fourier features for numeric embedding
+num_frequencies = 32  # Number of Fourier frequencies for numeric values
+
+# ============================================================================
 # OUTPUT PATHS
 # ============================================================================
 model_id = f"ckpt_{n_layer}_{n_head}_{n_embd}_{block_size}_{max_iters}"
 meta_id = f"meta_num_{data_version}.pkl"
-phase = "baseline"
+phase = "optimized"  # Changed from "baseline" to "optimized"
 
 out_dir = f"ckpt/{dataset}_{data_version}_{phase}"
 
@@ -81,7 +91,7 @@ config = {k: globals()[k] for k in config_keys}
 
 # Experiment identification
 experiment_name = "dota2_transformer"
-run_name = f"baseline_{n_layer}_{n_head}_{n_embd}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
+run_name = f"optimized_{n_layer}_{n_head}_{n_embd}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
 model_args = dict(
     device=device,
@@ -95,6 +105,13 @@ model_args = dict(
     n_embd=n_embd,
     dropout=dropout,
     bias=bias,
+    # Architecture optimizations
+    use_rope=use_rope,
+    use_swiglu=use_swiglu,
+    use_rmsnorm=use_rmsnorm,
+    use_fourier_num=use_fourier_num,
+    num_frequencies=num_frequencies,
+    # Training config
     batch_size=batch_size,
     warmup_iters=warmup_iters,
     eval_iters=eval_iters,

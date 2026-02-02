@@ -14,7 +14,7 @@ from torch.nn import functional as F
 
 import mlflow
 
-from model.modules import Block, LayerNorm
+from model.modules import Block, LayerNorm, RMSNorm, RotaryEmbedding, NumericEmbedding
 from model.tokenizer import Tokenizer
 
 
@@ -35,6 +35,13 @@ class GPTConfig:
     n_embd: int = 768
     dropout: float = 0.0
     bias: bool = True
+    
+    # Architecture optimizations (Phase 3)
+    use_rope: bool = True  # Rotary Position Embeddings
+    use_swiglu: bool = True  # SwiGLU activation in MLP
+    use_rmsnorm: bool = False  # RMSNorm instead of LayerNorm
+    use_fourier_num: bool = True  # Fourier features for numeric embedding
+    num_frequencies: int = 32  # Number of Fourier frequencies
 
     batch_size: int = 64
     warmup_iters: int = 100
@@ -139,6 +146,16 @@ class Generator:
 
 
 class GPT(nn.Module):
+    """
+    GPT Language Model with architecture optimizations.
+    
+    Features:
+    - Dual-head output: Token prediction + Numeric regression
+    - Optional RoPE (Rotary Position Embeddings)
+    - Optional SwiGLU MLP activation
+    - Optional RMSNorm instead of LayerNorm
+    - Fourier numeric embeddings for continuous values
+    """
     optimizer: torch.optim.Optimizer
     require_backward_grad_sync: bool
 
@@ -153,31 +170,71 @@ class GPT(nn.Module):
 
         self.data_train: DataTN = DataTN()
         self.data_val: DataTN = DataTN()
-
-        self.transformer = nn.ModuleDict(
-            dict(
-                wte=nn.Embedding(meta["vocab_size"], config.n_embd),
-                wpe=nn.Embedding(config.block_size, config.n_embd),
-                drop=nn.Dropout(config.dropout),
-                h=nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
-                ln_f=LayerNorm(config.n_embd, bias=config.bias),
+        
+        # Initialize RoPE if enabled (shared across all attention layers)
+        rotary_emb = None
+        if getattr(config, 'use_rope', True):
+            head_dim = config.n_embd // config.n_head
+            rotary_emb = RotaryEmbedding(head_dim, config.block_size)
+            print(f"Using RoPE with head_dim={head_dim}")
+        
+        # Initialize numeric embedding if using Fourier features
+        self.num_embed = None
+        if getattr(config, 'use_fourier_num', True):
+            num_frequencies = getattr(config, 'num_frequencies', 32)
+            self.num_embed = NumericEmbedding(
+                config.n_embd, 
+                use_fourier=True, 
+                num_frequencies=num_frequencies
             )
+            print(f"Using Fourier numeric embedding with {num_frequencies} frequencies")
+        
+        # Get architecture options
+        use_swiglu = getattr(config, 'use_swiglu', True)
+        use_rmsnorm = getattr(config, 'use_rmsnorm', False)
+        
+        # Build transformer with optional position embeddings
+        transformer_dict = dict(
+            wte=nn.Embedding(meta["vocab_size"], config.n_embd),
+            drop=nn.Dropout(config.dropout),
+            h=nn.ModuleList([
+                Block(config, rotary_emb=rotary_emb, use_swiglu=use_swiglu, use_rmsnorm=use_rmsnorm) 
+                for _ in range(config.n_layer)
+            ]),
         )
+        
+        # Add position embeddings only if not using RoPE
+        if rotary_emb is None:
+            transformer_dict['wpe'] = nn.Embedding(config.block_size, config.n_embd)
+        
+        # Add final normalization
+        if use_rmsnorm:
+            transformer_dict['ln_f'] = RMSNorm(config.n_embd)
+        else:
+            transformer_dict['ln_f'] = LayerNorm(config.n_embd, bias=config.bias)
+        
+        self.transformer = nn.ModuleDict(transformer_dict)
+        
+        # Output heads
         self.lm_head = nn.Linear(config.n_embd, meta["vocab_size"], bias=False)
         self.num_head = nn.Linear(config.n_embd, 1)
 
         # https://paperswithcode.com/method/weight-tying
         self.transformer.wte.weight = self.lm_head.weight
+        
+        # Track if using RoPE (for forward pass)
+        self.use_rope = rotary_emb is not None
 
         # apply special scaled init to residual projections
         self.apply(self._init_weights)
         for pn, p in self.named_parameters():
-            if pn.endswith("c_proj.weight"):
+            if pn.endswith("c_proj.weight") or pn.endswith("w2.weight"):
                 torch.nn.init.normal_(
                     p, mean=0.0, std=0.02 / math.sqrt(2 * config.n_layer)
                 )
 
-        print("nr of pars: %.2fM" % (self.get_num_params() / 1e6,))
+        print(f"Model initialized: {self.get_num_params()/1e6:.2f}M params, "
+              f"RoPE={self.use_rope}, SwiGLU={use_swiglu}, RMSNorm={use_rmsnorm}")
 
     @staticmethod
     def _init_weights(module):
@@ -339,26 +396,52 @@ class GPT(nn.Module):
         return torch.multinomial(probs, num_samples=1)
 
     def forward(self, x_t, x_n, y_t=None, y_n=None):
+        """
+        Forward pass with dual-head output (tokens + numbers).
+        
+        Args:
+            x_t: Token indices [batch, seq_len]
+            x_n: Numeric values [batch, seq_len] (1.0 for non-numeric tokens)
+            y_t: Target token indices (optional, for training)
+            y_n: Target numeric values (optional, for training)
+            
+        Returns:
+            logits_t: Token logits [batch, seq_len, vocab_size]
+            loss_t: Token cross-entropy loss (None if no targets)
+            mod_n: Numeric predictions [batch, seq_len]
+            loss_n: Numeric MSE loss (None if no targets)
+        """
         b, t = x_t.size()
         if t > self.config.block_size:
-            raise Exception(
-                f"invalid length: {t} (block size {self.config.block_size})"
+            raise ValueError(
+                f"Sequence length {t} exceeds block size {self.config.block_size}"
             )
 
-        # token + num emb
+        # Token embeddings
         tok_emb = self.transformer.wte(x_t)  # shape (b, t, n_embd)
-        tok_emb = tok_emb * x_n.unsqueeze(2)  # num emb
+        
+        # Numeric embeddings - use Fourier features if available, else scalar multiply
+        if self.num_embed is not None:
+            # Fourier numeric embedding (additive, more expressive)
+            num_emb = self.num_embed(x_n)  # shape (b, t, n_embd)
+            tok_emb = tok_emb + num_emb
+        else:
+            # Legacy: scalar multiplication (all dims scaled equally)
+            tok_emb = tok_emb * x_n.unsqueeze(2)
 
-        # pos emb
-        pos = torch.arange(0, t, dtype=torch.long, device=x_t.device)  # shape (t)
-        pos_emb = self.transformer.wpe(pos)  # shape (t, n_embd)
+        # Position embeddings (only if not using RoPE)
+        if not self.use_rope:
+            pos = torch.arange(0, t, dtype=torch.long, device=x_t.device)
+            pos_emb = self.transformer.wpe(pos)
+            tok_emb = tok_emb + pos_emb
 
-        x = self.transformer.drop(tok_emb + pos_emb)
+        # Transformer forward
+        x = self.transformer.drop(tok_emb)
         for block in self.transformer.h:
             x = block(x)
         x = self.transformer.ln_f(x)
 
-        # calculate loss if given targets
+        # Calculate loss if given targets
         if y_t is not None:
             logits_t = self.lm_head(x)
             loss_t = F.cross_entropy(
@@ -368,12 +451,15 @@ class GPT(nn.Module):
             )
 
             mod_n = self.num_head(x).squeeze(-1)
-            mask = y_n != 1
-            mod_n = mod_n * mask
-            y_n = y_n * mask
-            loss_n = F.mse_loss(mod_n.view(-1), y_n.view(-1))
+            # Mask loss to only numeric positions (where y_n != 1)
+            mask = (y_n != 1).float()
+            masked_pred = mod_n * mask
+            masked_target = y_n * mask
+            # Avoid division by zero
+            num_numeric = mask.sum().clamp(min=1)
+            loss_n = F.mse_loss(masked_pred, masked_target, reduction='sum') / num_numeric
         else:
-            # only forward lm_head on very last position
+            # Inference: only compute for last position
             logits_t = self.lm_head(x[:, [-1], :])
             loss_t = None
             mod_n = self.num_head(x[:, [-1], :])
