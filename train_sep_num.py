@@ -1,5 +1,4 @@
 import os
-from contextlib import nullcontext
 
 import torch
 import mlflow
@@ -7,7 +6,7 @@ import mlflow
 # Configure PyTorch memory allocator for better fragmentation handling
 os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
-from config.train_dota2_baseline import *
+from config.train_dota2 import *
 from dota2.data.data_train import get_train_val_meta
 from dota2.data.dataset import Dota2Dataset, create_dataloader, InfiniteDataLoader
 from model.GPT import GPT, GPTConfig

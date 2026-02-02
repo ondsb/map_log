@@ -1,15 +1,3 @@
-"""
-Phase 1: Baseline Configuration (4.8M parameters)
--------------------------------------------------
-Purpose: Establish ground truth metrics on ThinkStation Blackwell
-- Profile memory footprint
-- Measure tokens/sec throughput
-- Validate training convergence matches previous runs
-
-Model: 8 layers, 8 heads, 256 embedding dim
-Expected memory: ~8-12GB peak
-"""
-
 import datetime
 from pathlib import Path
 
@@ -36,20 +24,20 @@ data_version = "v0"
 # ============================================================================
 # MODEL ARCHITECTURE - Phase 1 Baseline (4.8M params)
 # ============================================================================
-n_layer = 16
-n_head = 16
-n_embd = 1024
-block_size = 1024
+n_layer = 8
+n_head = 8
+n_embd = 256
+block_size = 512
 dropout = 0.05
 bias = False
 
 # ============================================================================
 # TRAINING CONFIGURATION
 # ============================================================================
-batch_size = 128  # Reduced for 5.6GB GPU
-gradient_accumulation_steps = 2  # Increased to maintain effective batch size
-# Effective batch size = 8 * 16 = 128 sequences
-# Tokens per iter = 128 * 1024 = 131,072 tokens
+batch_size = 32
+gradient_accumulation_steps = 2
+# effective batch size = 8batch_size * gradient_accumulation_steps 
+# tokens per iter = effective batch size * block_size
 
 # Learning rate schedule
 learning_rate = 5e-4
@@ -66,9 +54,9 @@ beta2 = 0.99
 grad_clip = 1.0
 
 # Evaluation and checkpointing
-eval_interval = 5
-eval_iters = 1  # Reduced for faster/lighter evaluations on small GPU
-log_interval = 1
+eval_interval = 100
+eval_iters = 50
+log_interval = 10
 always_save_checkpoint = True
 
 # ============================================================================
