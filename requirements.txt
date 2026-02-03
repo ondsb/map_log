@@ -20,4 +20,9 @@ boto3>=1.34.0
 tqdm>=4.66.0
 requests>=2.32.0
 
+# Inference API Server (optional - for inference.server)
+fastapi>=0.109.0
+uvicorn>=0.27.0
+pydantic>=2.5.0
+
 # uv pip install --pre torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu128

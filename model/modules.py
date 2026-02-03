@@ -278,7 +278,24 @@ class CausalSelfAttention(nn.Module):
                 ),
             )
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self,
+        x: torch.Tensor,
+        kv_cache: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+        start_pos: int = 0,
+    ) -> Tuple[torch.Tensor, Optional[Tuple[torch.Tensor, torch.Tensor]]]:
+        """
+        Forward pass with optional KV cache for efficient inference.
+
+        Args:
+            x: Input tensor [B, T, C]
+            kv_cache: Optional tuple of (k_cache, v_cache) each [B, n_head, cache_len, head_dim]
+            start_pos: Starting position in sequence (for RoPE and cache indexing)
+
+        Returns:
+            output: Attention output [B, T, C]
+            new_kv_cache: Updated (k_cache, v_cache) if caching, else None
+        """
         B, T, C = x.size()
 
         # Compute Q, K, V
@@ -290,35 +307,76 @@ class CausalSelfAttention(nn.Module):
         k = k.view(B, T, self.n_head, self.head_dim).transpose(1, 2)
         v = v.view(B, T, self.n_head, self.head_dim).transpose(1, 2)
 
-        # Apply RoPE if available
+        # Apply RoPE if available (with correct position offset)
         if self.rotary_emb is not None:
-            cos, sin = self.rotary_emb(x, T)
+            # For cached inference, we need positions from start_pos to start_pos + T
+            seq_len = start_pos + T
+            cos, sin = self.rotary_emb(x, seq_len)
+            # Only use the positions for current tokens
+            cos = cos[start_pos:seq_len]
+            sin = sin[start_pos:seq_len]
             q, k = apply_rotary_pos_emb(q, k, cos, sin)
+
+        # Handle KV cache for incremental decoding
+        new_kv_cache = None
+        if kv_cache is not None:
+            k_cache, v_cache = kv_cache
+            # Concatenate new K, V with cached values
+            k = torch.cat([k_cache, k], dim=2)
+            v = torch.cat([v_cache, v], dim=2)
+            new_kv_cache = (k, v)
+        elif not self.training:
+            # During inference without cache, still return cache for next iteration
+            new_kv_cache = (k, v)
+
+        # Get full sequence length for attention
+        S = k.size(2)  # Full key/value sequence length
 
         # Compute attention
         if self.flash:
             # Flash Attention (memory efficient, fused kernel)
-            y = F.scaled_dot_product_attention(
-                q,
-                k,
-                v,
-                attn_mask=None,
-                dropout_p=self.dropout if self.training else 0.0,
-                is_causal=True,
-            )
+            # Note: When using cache, we need is_causal=False and manual masking
+            if kv_cache is not None:
+                # Incremental decoding: query attends to all cached + current keys
+                # No causal mask needed since we're only generating one token at a time
+                y = F.scaled_dot_product_attention(
+                    q,
+                    k,
+                    v,
+                    attn_mask=None,
+                    dropout_p=0.0,  # No dropout during inference
+                    is_causal=False,  # Full attention to cached context
+                )
+            else:
+                # Prefill or training: use causal attention
+                y = F.scaled_dot_product_attention(
+                    q,
+                    k,
+                    v,
+                    attn_mask=None,
+                    dropout_p=self.dropout if self.training else 0.0,
+                    is_causal=True,
+                )
         else:
             # Manual attention (fallback)
             scale = 1.0 / math.sqrt(self.head_dim)
             att = (q @ k.transpose(-2, -1)) * scale
-            att = att.masked_fill(self.causal_mask[:, :, :T, :T] == 0, float("-inf"))
+
+            if kv_cache is None:
+                # Causal mask for prefill/training
+                att = att.masked_fill(
+                    self.causal_mask[:, :, :T, :S] == 0, float("-inf")
+                )
+
             att = F.softmax(att, dim=-1)
-            att = self.attn_dropout(att)
+            if self.training:
+                att = self.attn_dropout(att)
             y = att @ v
 
         # Reassemble heads and project
         y = y.transpose(1, 2).contiguous().view(B, T, C)
         y = self.resid_dropout(self.c_proj(y))
-        return y
+        return y, new_kv_cache
 
 
 class MLP(nn.Module):
@@ -427,7 +485,25 @@ class Block(nn.Module):
         else:
             self.mlp = MLP(config)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = x + self.attn(self.ln_1(x))
+    def forward(
+        self,
+        x: torch.Tensor,
+        kv_cache: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+        start_pos: int = 0,
+    ) -> Tuple[torch.Tensor, Optional[Tuple[torch.Tensor, torch.Tensor]]]:
+        """
+        Forward pass with optional KV cache support.
+
+        Args:
+            x: Input tensor [B, T, C]
+            kv_cache: Optional KV cache from previous forward pass
+            start_pos: Starting position for RoPE
+
+        Returns:
+            output: Block output [B, T, C]
+            new_kv_cache: Updated KV cache if caching, else None
+        """
+        attn_out, new_kv_cache = self.attn(self.ln_1(x), kv_cache, start_pos)
+        x = x + attn_out
         x = x + self.mlp(self.ln_2(x))
-        return x
+        return x, new_kv_cache

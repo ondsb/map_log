@@ -404,7 +404,7 @@ class MapLogModel(nn.Module):
         probs = F.softmax(logits_t, dim=-1)
         return torch.multinomial(probs, num_samples=1)
 
-    def forward(self, x_t, x_n, y_t=None, y_n=None):
+    def forward(self, x_t, x_n, y_t=None, y_n=None, kv_caches=None, start_pos=0):
         """
         Forward pass with dual-head output (tokens + numbers).
 
@@ -413,12 +413,15 @@ class MapLogModel(nn.Module):
             x_n: Numeric values [batch, seq_len] (1.0 for non-numeric tokens)
             y_t: Target token indices (optional, for training)
             y_n: Target numeric values (optional, for training)
+            kv_caches: Optional list of (k, v) tuples per layer for cached inference
+            start_pos: Starting position for RoPE when using KV cache
 
         Returns:
             logits_t: Token logits [batch, seq_len, vocab_size]
             loss_t: Token cross-entropy loss (None if no targets)
             mod_n: Numeric predictions [batch, seq_len]
             loss_n: Numeric MSE loss (None if no targets)
+            new_kv_caches: Updated KV caches if using cache, else None
         """
         b, t = x_t.size()
         if t > self.config.block_size:
@@ -440,14 +443,17 @@ class MapLogModel(nn.Module):
 
         # Position embeddings (only if not using RoPE)
         if not self.use_rope:
-            pos = torch.arange(0, t, dtype=torch.long, device=x_t.device)
+            pos = torch.arange(start_pos, start_pos + t, dtype=torch.long, device=x_t.device)
             pos_emb = self.transformer.wpe(pos)
             tok_emb = tok_emb + pos_emb
 
-        # Transformer forward
+        # Transformer forward with optional KV cache
         x = self.transformer.drop(tok_emb)
-        for block in self.transformer.h:
-            x = block(x)
+        new_kv_caches = []
+        for i, block in enumerate(self.transformer.h):
+            layer_cache = kv_caches[i] if kv_caches is not None else None
+            x, new_cache = block(x, layer_cache, start_pos)
+            new_kv_caches.append(new_cache)
         x = self.transformer.ln_f(x)
 
         # Calculate loss if given targets
@@ -469,6 +475,7 @@ class MapLogModel(nn.Module):
             loss_n = (
                 F.mse_loss(masked_pred, masked_target, reduction="sum") / num_numeric
             )
+            return logits_t, loss_t, mod_n, loss_n
         else:
             # Inference: only compute for last position
             logits_t = self.lm_head(x[:, [-1], :])
@@ -476,6 +483,9 @@ class MapLogModel(nn.Module):
             mod_n = self.num_head(x[:, [-1], :])
             loss_n = None
 
+        # Return KV caches for inference (None during training)
+        if kv_caches is not None or (y_t is None and not self.training):
+            return logits_t, loss_t, mod_n, loss_n, new_kv_caches
         return logits_t, loss_t, mod_n, loss_n
 
     def do_train(self, data, iter_num, best_val_loss, ddp, master_process):  # todo
