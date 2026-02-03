@@ -2,7 +2,6 @@ import json
 import os
 
 import pandas as pd
-import seaborn as sns
 
 from config.train_dota2 import data_version
 from model.scaler import Scaler, ScalerPars

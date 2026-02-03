@@ -28,10 +28,16 @@ os.makedirs(out_dir, exist_ok=True)
 
 # dtype and autocast context
 dtype = "bfloat16" if torch.cuda.is_bf16_supported() else "float16"
-ptdtype = {"float32": torch.float32, "bfloat16": torch.bfloat16, "float16": torch.float16}[dtype]
+ptdtype = {
+    "float32": torch.float32,
+    "bfloat16": torch.bfloat16,
+    "float16": torch.float16,
+}[dtype]
 ctx = torch.amp.autocast(device_type="cuda", dtype=ptdtype)
 
-mlflow_tracking_uri = "arn:aws:sagemaker:eu-west-1:192663853223:mlflow-app/app-WZTYJFWD56IS"
+mlflow_tracking_uri = (
+    "arn:aws:sagemaker:eu-west-1:192663853223:mlflow-app/app-WZTYJFWD56IS"
+)
 
 # mlflow
 if mlflow_log:
@@ -53,7 +59,9 @@ if mlflow_log:
             "max_iters": max_iters,
             "dtype": dtype,
             "gpu_name": torch.cuda.get_device_name(0),
-            "gpu_memory_gb": round(torch.cuda.get_device_properties(0).total_memory / 1e9, 2),
+            "gpu_memory_gb": round(
+                torch.cuda.get_device_properties(0).total_memory / 1e9, 2
+            ),
             # Architecture optimizations
             "use_rope": use_rope,
             "use_swiglu": use_swiglu,
@@ -93,7 +101,9 @@ model.to(device)
 # Memory baseline (before compile)
 torch.cuda.reset_peak_memory_stats()
 if mlflow_log:
-    mlflow.log_metric("memory/model_loaded_gb", torch.cuda.memory_allocated() / 1e9, step=0)
+    mlflow.log_metric(
+        "memory/model_loaded_gb", torch.cuda.memory_allocated() / 1e9, step=0
+    )
 
 # Compile model with optimized settings for unified memory
 if do_compile:
@@ -104,7 +114,9 @@ if do_compile:
 
 # Log memory after compile
 if mlflow_log:
-    mlflow.log_metric("memory/after_compile_gb", torch.cuda.memory_allocated() / 1e9, step=0)
+    mlflow.log_metric(
+        "memory/after_compile_gb", torch.cuda.memory_allocated() / 1e9, step=0
+    )
 
 # Create efficient datasets with pre-encoded, pre-padded tensors
 # This avoids per-batch NumPy allocations during training

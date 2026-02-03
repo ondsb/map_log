@@ -92,7 +92,11 @@ out_dir = f"ckpt/{dataset}_{data_version}_{phase}"
 # ============================================================================
 # DERIVED CONFIGURATION (do not modify)
 # ============================================================================
-config_keys = [k for k, v in globals().items() if not k.startswith("_") and isinstance(v, (int, float, bool, str, type(None)))]
+config_keys = [
+    k
+    for k, v in globals().items()
+    if not k.startswith("_") and isinstance(v, (int, float, bool, str, type(None)))
+]
 config = {k: globals()[k] for k in config_keys}
 
 # Experiment identification

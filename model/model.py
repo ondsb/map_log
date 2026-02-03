@@ -35,14 +35,14 @@ class ModelConfig:
     n_embd: int = 768
     dropout: float = 0.0
     bias: bool = True
-    
+
     # Architecture optimizations (Phase 3)
     use_rope: bool = True  # Rotary Position Embeddings
     use_swiglu: bool = True  # SwiGLU activation in MLP
     use_rmsnorm: bool = False  # RMSNorm instead of LayerNorm
     use_fourier_num: bool = True  # Fourier features for numeric embedding
     num_frequencies: int = 32  # Number of Fourier frequencies
-    
+
     # Hardware configuration
     hardware_peak_tflops: float = 137.0  # PGX G10 FP16 peak (A100=312, H100=989)
 
@@ -157,6 +157,7 @@ class MapLogModel(nn.Module):
     - Optional RMSNorm instead of LayerNorm
     - Fourier numeric embeddings for continuous values
     """
+
     optimizer: torch.optim.Optimizer
     require_backward_grad_sync: bool
 
@@ -171,58 +172,63 @@ class MapLogModel(nn.Module):
 
         self.data_train: DataTN = DataTN()
         self.data_val: DataTN = DataTN()
-        
+
         # Initialize RoPE if enabled (shared across all attention layers)
         rotary_emb = None
-        if getattr(config, 'use_rope', True):
+        if getattr(config, "use_rope", True):
             head_dim = config.n_embd // config.n_head
             rotary_emb = RotaryEmbedding(head_dim, config.block_size)
             print(f"Using RoPE with head_dim={head_dim}")
-        
+
         # Initialize numeric embedding if using Fourier features
         self.num_embed = None
-        if getattr(config, 'use_fourier_num', True):
-            num_frequencies = getattr(config, 'num_frequencies', 32)
+        if getattr(config, "use_fourier_num", True):
+            num_frequencies = getattr(config, "num_frequencies", 32)
             self.num_embed = NumericEmbedding(
-                config.n_embd, 
-                use_fourier=True, 
-                num_frequencies=num_frequencies
+                config.n_embd, use_fourier=True, num_frequencies=num_frequencies
             )
             print(f"Using Fourier numeric embedding with {num_frequencies} frequencies")
-        
+
         # Get architecture options
-        use_swiglu = getattr(config, 'use_swiglu', True)
-        use_rmsnorm = getattr(config, 'use_rmsnorm', False)
-        
+        use_swiglu = getattr(config, "use_swiglu", True)
+        use_rmsnorm = getattr(config, "use_rmsnorm", False)
+
         # Build transformer with optional position embeddings
         transformer_dict = dict(
             wte=nn.Embedding(meta["vocab_size"], config.n_embd),
             drop=nn.Dropout(config.dropout),
-            h=nn.ModuleList([
-                Block(config, rotary_emb=rotary_emb, use_swiglu=use_swiglu, use_rmsnorm=use_rmsnorm) 
-                for _ in range(config.n_layer)
-            ]),
+            h=nn.ModuleList(
+                [
+                    Block(
+                        config,
+                        rotary_emb=rotary_emb,
+                        use_swiglu=use_swiglu,
+                        use_rmsnorm=use_rmsnorm,
+                    )
+                    for _ in range(config.n_layer)
+                ]
+            ),
         )
-        
+
         # Add position embeddings only if not using RoPE
         if rotary_emb is None:
-            transformer_dict['wpe'] = nn.Embedding(config.block_size, config.n_embd)
-        
+            transformer_dict["wpe"] = nn.Embedding(config.block_size, config.n_embd)
+
         # Add final normalization
         if use_rmsnorm:
-            transformer_dict['ln_f'] = RMSNorm(config.n_embd)
+            transformer_dict["ln_f"] = RMSNorm(config.n_embd)
         else:
-            transformer_dict['ln_f'] = LayerNorm(config.n_embd, bias=config.bias)
-        
+            transformer_dict["ln_f"] = LayerNorm(config.n_embd, bias=config.bias)
+
         self.transformer = nn.ModuleDict(transformer_dict)
-        
+
         # Output heads
         self.lm_head = nn.Linear(config.n_embd, meta["vocab_size"], bias=False)
         self.num_head = nn.Linear(config.n_embd, 1)
 
         # https://paperswithcode.com/method/weight-tying
         self.transformer.wte.weight = self.lm_head.weight
-        
+
         # Track if using RoPE (for forward pass)
         self.use_rope = rotary_emb is not None
 
@@ -234,8 +240,10 @@ class MapLogModel(nn.Module):
                     p, mean=0.0, std=0.02 / math.sqrt(2 * config.n_layer)
                 )
 
-        print(f"Model initialized: {self.get_num_params()/1e6:.2f}M params, "
-              f"RoPE={self.use_rope}, SwiGLU={use_swiglu}, RMSNorm={use_rmsnorm}")
+        print(
+            f"Model initialized: {self.get_num_params()/1e6:.2f}M params, "
+            f"RoPE={self.use_rope}, SwiGLU={use_swiglu}, RMSNorm={use_rmsnorm}"
+        )
 
     @staticmethod
     def _init_weights(module):
@@ -399,13 +407,13 @@ class MapLogModel(nn.Module):
     def forward(self, x_t, x_n, y_t=None, y_n=None):
         """
         Forward pass with dual-head output (tokens + numbers).
-        
+
         Args:
             x_t: Token indices [batch, seq_len]
             x_n: Numeric values [batch, seq_len] (1.0 for non-numeric tokens)
             y_t: Target token indices (optional, for training)
             y_n: Target numeric values (optional, for training)
-            
+
         Returns:
             logits_t: Token logits [batch, seq_len, vocab_size]
             loss_t: Token cross-entropy loss (None if no targets)
@@ -420,7 +428,7 @@ class MapLogModel(nn.Module):
 
         # Token embeddings
         tok_emb = self.transformer.wte(x_t)  # shape (b, t, n_embd)
-        
+
         # Numeric embeddings - use Fourier features if available, else scalar multiply
         if self.num_embed is not None:
             # Fourier numeric embedding (additive, more expressive)
@@ -458,7 +466,9 @@ class MapLogModel(nn.Module):
             masked_target = y_n * mask
             # Avoid division by zero
             num_numeric = mask.sum().clamp(min=1)
-            loss_n = F.mse_loss(masked_pred, masked_target, reduction='sum') / num_numeric
+            loss_n = (
+                F.mse_loss(masked_pred, masked_target, reduction="sum") / num_numeric
+            )
         else:
             # Inference: only compute for last position
             logits_t = self.lm_head(x[:, [-1], :])
@@ -569,16 +579,16 @@ class MapLogModel(nn.Module):
     ):
         """
         Memory-efficient training loop using PyTorch DataLoaders.
-        
+
         Key optimizations over do_train():
         - Uses pre-encoded, pre-padded tensors from DataLoader
         - No per-batch NumPy allocations
         - Proper memory cleanup with gradient zeroing
         - Prefetching batches while GPU computes
-        
+
         Args:
             train_loader: InfiniteDataLoader for training data
-            val_loader: InfiniteDataLoader for validation data  
+            val_loader: InfiniteDataLoader for validation data
             ddp: Whether using DistributedDataParallel
             master_process: Whether this is the master process (for logging)
             iter_num: Starting iteration number
@@ -593,7 +603,7 @@ class MapLogModel(nn.Module):
 
         raw_model = self.module if ddp else self
         self.ctx = ctx
-        
+
         # Store loaders for estimate_loss_dataloader
         self._train_loader = train_loader
         self._val_loader = val_loader
@@ -605,39 +615,55 @@ class MapLogModel(nn.Module):
         self.train()
 
         # Prefetch first batch
-        x_t_train, x_n_train, y_t_train, y_n_train = train_loader.get_batch(self.config.device)
-        
+        x_t_train, x_n_train, y_t_train, y_n_train = train_loader.get_batch(
+            self.config.device
+        )
+
         while True:
             lr = self._learning_rate(iter_num)
             for param_group in self.optimizer.param_groups:
                 param_group["lr"] = lr
 
             if iter_num % self.config.eval_interval == 0 and master_process:
-                self._log_eval_dataloader(iter_num, raw_model, lr, running_mfu, best_val_loss)
-                # Re-fetch batch after eval to ensure clean memory state                
+                self._log_eval_dataloader(
+                    iter_num, raw_model, lr, running_mfu, best_val_loss
+                )
+                # Re-fetch batch after eval to ensure clean memory state
                 try:
-                    x_t_train, x_n_train, y_t_train, y_n_train = train_loader.get_batch(self.config.device)
+                    x_t_train, x_n_train, y_t_train, y_n_train = train_loader.get_batch(
+                        self.config.device
+                    )
                 except StopIteration:
                     # Reset the iterator if it hits the end
-                    train_loader.reset_iterator() 
-                    x_t_train, x_n_train, y_t_train, y_n_train = train_loader.get_batch(self.config.device)
+                    train_loader.reset_iterator()
+                    x_t_train, x_n_train, y_t_train, y_n_train = train_loader.get_batch(
+                        self.config.device
+                    )
 
             for micro_step in range(self.config.gradient_accumulation_steps):
                 if ddp:
-                    self.require_backward_grad_sync = micro_step == self.config.gradient_accumulation_steps - 1
+                    self.require_backward_grad_sync = (
+                        micro_step == self.config.gradient_accumulation_steps - 1
+                    )
                 with self.ctx:
-                    _, loss_t, _, loss_n = self(x_t_train, x_n_train, y_t_train, y_n_train)
+                    _, loss_t, _, loss_n = self(
+                        x_t_train, x_n_train, y_t_train, y_n_train
+                    )
                     loss = (loss_t + loss_n) / self.config.gradient_accumulation_steps
 
                 scaler.scale(loss).backward()
 
                 # Prefetch next batch while GPU is computing
                 try:
-                    x_t_train, x_n_train, y_t_train, y_n_train = train_loader.get_batch(self.config.device)
+                    x_t_train, x_n_train, y_t_train, y_n_train = train_loader.get_batch(
+                        self.config.device
+                    )
                 except StopIteration:
                     # Reset the iterator if it hits the end
-                    train_loader.reset_iterator() 
-                    x_t_train, x_n_train, y_t_train, y_n_train = train_loader.get_batch(self.config.device)
+                    train_loader.reset_iterator()
+                    x_t_train, x_n_train, y_t_train, y_n_train = train_loader.get_batch(
+                        self.config.device
+                    )
 
             if self.config.grad_clip != 0.0:
                 scaler.unscale_(self.optimizer)
@@ -651,12 +677,14 @@ class MapLogModel(nn.Module):
 
             t1 = time.time()
             if iter_num % self.config.log_interval == 0 and master_process:
-                self.log_no_eval(raw_model, loss, local_iter_num, t1 - t0, running_mfu, iter_num)
+                self.log_no_eval(
+                    raw_model, loss, local_iter_num, t1 - t0, running_mfu, iter_num
+                )
             t0 = t1
 
             iter_num += 1
             local_iter_num += 1
-            
+
             if iter_num > self.config.max_iters:
                 break
 
@@ -680,7 +708,9 @@ class MapLogModel(nn.Module):
 
     def _log_eval_dataloader(self, iter_num, raw_model, lr, running_mfu, best_val_loss):
         losses = self._estimate_loss_dataloader()
-        print(f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
+        print(
+            f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}"
+        )
 
         if self.config.mlflow_log:
             virtual_mem = psutil.virtual_memory()
@@ -707,7 +737,9 @@ class MapLogModel(nn.Module):
                     "config": self.config,
                 }
                 print(f"saving {self.config.model_id} to {self.config.out_dir}")
-                ckpt_path = os.path.join(self.config.out_dir, f"{self.config.model_id}_ep{iter_num}.pt")
+                ckpt_path = os.path.join(
+                    self.config.out_dir, f"{self.config.model_id}_ep{iter_num}.pt"
+                )
                 torch.save(checkpoint, ckpt_path)
 
     def get_batch(self, split: str):
@@ -851,7 +883,7 @@ class MapLogModel(nn.Module):
         params are actually used as weights in the final layer, so we include them.
         """
         n_params = sum(p.numel() for p in self.parameters())
-        if non_embedding and hasattr(self.transformer, 'wpe'):
+        if non_embedding and hasattr(self.transformer, "wpe"):
             n_params -= self.transformer.wpe.weight.numel()
         return n_params
 
@@ -866,10 +898,10 @@ class MapLogModel(nn.Module):
     def estimate_mfu(self, fwdbwd_per_iter, dt):
         """
         Estimate model FLOPs utilization (MFU).
-        
+
         Compares achieved FLOPs to theoretical hardware peak.
         Updated for PGX G10 (Orin-based, ~275 TFLOPS INT8, ~137 TFLOPS FP16).
-        
+
         Reference: PaLM paper Appendix B (https://arxiv.org/abs/2204.02311)
         """
         N = self.get_num_params()
@@ -881,12 +913,12 @@ class MapLogModel(nn.Module):
         flops_per_fwdbwd = flops_per_token * T
         flops_per_iter = flops_per_fwdbwd * fwdbwd_per_iter
         flops_achieved = flops_per_iter * (1.0 / dt)
-        
+
         # Hardware-specific peak FLOPs (configurable)
         # PGX G10 (Orin): ~137 TFLOPS FP16
         # A100: 312 TFLOPS BF16
         # H100: 989 TFLOPS FP16 Tensor Core
-        hardware_flops = getattr(cfg, 'hardware_peak_tflops', 137) * 1e12
+        hardware_flops = getattr(cfg, "hardware_peak_tflops", 137) * 1e12
         mfu = flops_achieved / hardware_flops
 
         return mfu
@@ -940,14 +972,14 @@ class MapLogModel(nn.Module):
                 dt,
             )
             running_mfu = mfu if running_mfu == -1.0 else 0.9 * running_mfu + 0.1 * mfu
-        
+
         # Calculate throughput
         tokens_per_sec = self.tokens_per_iter / dt if dt > 0 else 0
-        
+
         print(
             f"iter {iter_num}: loss {lossf:.4f}, time {dt * 1000:.2f}ms, mfu {running_mfu * 100:.2f}%"
         )
-        
+
         if self.config.mlflow_log:
             virtual_mem = psutil.virtual_memory()
             mlflow.log_metrics(

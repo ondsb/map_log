@@ -2,7 +2,6 @@ import json
 import math
 import os
 import pickle
-import time
 
 import pandas as pd
 from tqdm import tqdm
@@ -169,9 +168,9 @@ def extract_dota2_v1():
                 for i in range(cur_nk.shape[0]):
                     nk = cur_nk.iloc[i]
                     side = "light" if nk.attacker_is_light else "dark"
-                    out[
-                        int(nk.game_time)
-                    ] = f"{side} team slayed {nk.target_type} at {gt_scaler.transform(int(nk.game_time))} "
+                    out[int(nk.game_time)] = (
+                        f"{side} team slayed {nk.target_type} at {gt_scaler.transform(int(nk.game_time))} "
+                    )
                 return out
 
             pk_dict = get_pk_dict(cur_pk)
