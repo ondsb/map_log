@@ -3,7 +3,7 @@ import os
 
 import pandas as pd
 from tqdm import tqdm
-from nanoGPT.config.train_dota2 import data_version
+from config.train_dota2 import data_version
 
 basedir = f"/home/user/ODDIN/llm/MjolnirMind/nanoGPT/out/dota2_{data_version}/matches_processed"
 

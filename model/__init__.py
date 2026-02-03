@@ -1,1 +1,1 @@
-from .GPT import GPT, GPTConfig, Generator, GenState, DataTN
+from .model import MapLogModel, ModelConfig, Generator, GenState, DataTN

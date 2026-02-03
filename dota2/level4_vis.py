@@ -8,8 +8,8 @@ import seaborn as sns
 from matplotlib import pyplot as plt
 from tqdm import tqdm
 
-from nanoGPT.model.scaler import Scaler, ScalerPars
-from nanoGPT.config.train_dota2 import data_version
+from model.scaler import Scaler, ScalerPars
+from config.train_dota2 import data_version
 
 srcdir = (
     f"/home/user/ODDIN/llm/MjolnirMind/nanoGPT/out/dota2_{data_version}/matches_runs"

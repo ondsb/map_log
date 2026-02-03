@@ -9,7 +9,7 @@ os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 from config.train_dota2 import *
 from dota2.data.data_train import get_train_val_meta
 from dota2.data.dataset import Dota2Dataset, create_dataloader, InfiniteDataLoader
-from model.GPT import GPT, GPTConfig
+from model.model import MapLogModel, ModelConfig
 from model.torch_config import set_torch_config
 from model.memory_utils import print_memory_summary, clear_memory, log_memory_stats
 
@@ -70,8 +70,8 @@ train_data, val_data, meta = get_train_val_meta()
 set_torch_config(unified_memory=UNIFIED_MEMORY)
 
 # Create model BEFORE loading data to GPU
-gpt_conf = GPTConfig(**model_args)
-model = GPT(gpt_conf, meta)
+gpt_conf = ModelConfig(**model_args)
+model = MapLogModel(gpt_conf, meta)
 
 if mlflow_log:
     mlflow.log_params(
@@ -100,7 +100,7 @@ if do_compile:
     # max-autotune: Better kernel selection for unified memory architecture
     # fullgraph: Compile entire model as single graph for maximum optimization
     print("Compiling model with max-autotune mode...")
-    model: GPT = torch.compile(model, mode="max-autotune", fullgraph=True)
+    model: MapLogModel = torch.compile(model, mode="max-autotune", fullgraph=True)
 
 # Log memory after compile
 if mlflow_log:

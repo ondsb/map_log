@@ -1,16 +1,11 @@
-import ast
 import json
-
-import numpy as np
-import seaborn as sns
-import pandas as pd
 import os
 
-from nanoGPT.config.train_dota2 import data_version
-from matplotlib import pyplot as plt
-from tqdm import tqdm
+import pandas as pd
+import seaborn as sns
 
-from nanoGPT.model.scaler import Scaler, ScalerPars
+from config.train_dota2 import data_version
+from model.scaler import Scaler, ScalerPars
 
 basedir = (
     f"/home/user/ODDIN/llm/MjolnirMind/nanoGPT/out/dota2_{data_version}/matches_stats"
@@ -25,11 +20,9 @@ team_stats = pd.read_hdf("/home/user/ODDIN/data/dota2/dota2_all.h5", "team_stats
 with open(maps, "r") as openfile:
     maps = json.load(openfile)
 
-
 gt_scaler = Scaler(ScalerPars(-3, 3, 0, 6500))
 tk_scaler = Scaler(ScalerPars(-3, 3, 0, 150))
 pr_scaler = Scaler(ScalerPars(-3, 3, 0, 1))
-
 
 big = []
 for file in os.listdir(basedir):

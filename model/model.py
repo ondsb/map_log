@@ -19,7 +19,7 @@ from model.tokenizer import Tokenizer
 
 
 @dataclass
-class GPTConfig:
+class ModelConfig:
     device: str = "cuda"
     device_type: str = "cuda"
     do_compile: bool = True
@@ -148,10 +148,8 @@ class Generator:
         return torch.tensor([[self.masks[self.state]]], device="cuda:0")
 
 
-class GPT(nn.Module):
+class MapLogModel(nn.Module):
     """
-    GPT Language Model with architecture optimizations.
-    
     Features:
     - Dual-head output: Token prediction + Numeric regression
     - Optional RoPE (Rotary Position Embeddings)
